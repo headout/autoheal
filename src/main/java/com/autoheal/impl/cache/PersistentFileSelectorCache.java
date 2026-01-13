@@ -57,8 +57,10 @@ public class PersistentFileSelectorCache implements SelectorCache {
         public int successes = 0;
         public Instant lastUsed = Instant.now();
         public long lastAccessTime = System.currentTimeMillis();
+        public long successRate;
 
-        public FileCacheMetrics() {}
+        public FileCacheMetrics() {
+        }
 
         public double getSuccessRate() {
             return attempts > 0 ? (double) successes / attempts : 0.0;
@@ -87,7 +89,8 @@ public class PersistentFileSelectorCache implements SelectorCache {
         public Instant createdAt;
         public long lastAccessTime;
 
-        public FileCacheEntry() {}
+        public FileCacheEntry() {
+        }
 
         public FileCacheEntry(CachedSelector cached) {
             this.selector = cached.getSelector();
@@ -103,12 +106,12 @@ public class PersistentFileSelectorCache implements SelectorCache {
             // In future, we could enhance this to store and restore the full fingerprint
             Position dummyPosition = new Position(0, 0, 0, 0);
             ElementFingerprint dummyFingerprint = new ElementFingerprint(
-                "",
-                dummyPosition,
-                java.util.Collections.emptyMap(),
-                "",
-                java.util.Collections.emptyList(),
-                ""
+                    "",
+                    dummyPosition,
+                    java.util.Collections.emptyMap(),
+                    "",
+                    java.util.Collections.emptyList(),
+                    ""
             );
             CachedSelector cached = new CachedSelector(selector, dummyFingerprint);
 
@@ -170,7 +173,7 @@ public class PersistentFileSelectorCache implements SelectorCache {
 
         System.out.println("[FILE-CACHE] Initialized persistent file cache at: " + cacheDirectory);
         logger.info("PersistentFileSelectorCache initialized. Directory: {}, Loaded entries: {}",
-                   cacheDirectory, memoryCache.estimatedSize());
+                cacheDirectory, memoryCache.estimatedSize());
     }
 
     @Override
@@ -210,7 +213,7 @@ public class PersistentFileSelectorCache implements SelectorCache {
 
         metrics.recordLoad(System.currentTimeMillis() - startTime);
         System.out.println("[FILE-CACHE] Cache STORED: " + key + " (expires in " +
-                          config.getExpireAfterWrite().toHours() + " hours)");
+                config.getExpireAfterWrite().toHours() + " hours)");
         logger.debug("Cached selector for key: {}", key);
     }
 
@@ -329,7 +332,8 @@ public class PersistentFileSelectorCache implements SelectorCache {
         File file = new File(cacheFilePath);
         if (file.exists()) {
             try {
-                TypeReference<Map<String, FileCacheEntry>> typeRef = new TypeReference<Map<String, FileCacheEntry>>() {};
+                TypeReference<Map<String, FileCacheEntry>> typeRef = new TypeReference<Map<String, FileCacheEntry>>() {
+                };
                 Map<String, FileCacheEntry> loadedEntries = objectMapper.readValue(file, typeRef);
 
                 int loadedCount = 0;
@@ -349,9 +353,9 @@ public class PersistentFileSelectorCache implements SelectorCache {
                 }
 
                 System.out.println("[FILE-CACHE] Loaded " + loadedCount + " entries from cache file, " +
-                                 expiredCount + " expired entries skipped");
+                        expiredCount + " expired entries skipped");
                 logger.info("Loaded {} cache entries from file, {} expired entries skipped",
-                           loadedCount, expiredCount);
+                        loadedCount, expiredCount);
             } catch (IOException e) {
                 logger.error("Failed to load cache from file: {}", cacheFilePath, e);
             }
@@ -367,7 +371,8 @@ public class PersistentFileSelectorCache implements SelectorCache {
         File file = new File(metricsFilePath);
         if (file.exists()) {
             try {
-                TypeReference<Map<String, FileCacheMetrics>> typeRef = new TypeReference<Map<String, FileCacheMetrics>>() {};
+                TypeReference<Map<String, FileCacheMetrics>> typeRef = new TypeReference<Map<String, FileCacheMetrics>>() {
+                };
                 Map<String, FileCacheMetrics> loadedMetrics = objectMapper.readValue(file, typeRef);
 
                 // Filter out expired metrics

@@ -5,7 +5,7 @@ import com.autoheal.model.AutomationFramework;
 import com.autoheal.model.ElementContext;
 import com.autoheal.model.ElementFingerprint;
 import com.autoheal.model.Position;
-import com.autoheal.util.HtmlOptimizer;
+import com.autoheal.util.dom.HtmlOptimizer;
 import com.autoheal.util.LocatorTypeDetector;
 import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
@@ -78,8 +78,8 @@ public class SeleniumWebAutomationAdapter implements WebAutomationAdapter {
     public CompletableFuture<String> getPageSource() {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                String pageSource = driver.getPageSource();
-                pageSource = HtmlOptimizer.optimize(pageSource);
+                String pageSource = "";
+                pageSource = HtmlOptimizer.optimizeWithMetrics(driver.getPageSource()).getOptimizedHtml();
                 logger.debug("Retrieved page source (length: {} characters)", pageSource.length());
                 return pageSource;
             } catch (Exception e) {
@@ -183,7 +183,7 @@ public class SeleniumWebAutomationAdapter implements WebAutomationAdapter {
         Map<String, String> attributes = new HashMap<>();
         try {
             // Common attributes to extract
-            String[] attrNames = {"id", "class", "name", "type", "value", "href", "src", "data-qa-marker","data-testid"};
+            String[] attrNames = {"id", "class", "name", "type", "value", "href", "src", "data-qa-marker", "data-testid"};
 
             for (String attrName : attrNames) {
                 String value = element.getAttribute(attrName);

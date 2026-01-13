@@ -15,7 +15,6 @@ import com.autoheal.impl.cache.RedisBasedSelectorCache;
 import com.autoheal.impl.cache.PersistentFileSelectorCache;
 import com.autoheal.impl.locator.CostOptimizedHybridElementLocator;
 import com.autoheal.impl.locator.DOMElementLocator;
-import com.autoheal.impl.locator.HybridElementLocator;
 import com.autoheal.impl.locator.VisualElementLocator;
 import com.autoheal.metrics.CacheMetrics;
 import com.autoheal.metrics.LocatorMetrics;
@@ -29,8 +28,9 @@ import com.autoheal.monitoring.AutoHealMetrics;
 import com.autoheal.monitoring.HealthStatus;
 import com.autoheal.reporting.AutoHealReporter;
 import com.autoheal.reporting.AutoHealReporter.SelectorStrategy;
-import com.autoheal.util.HtmlOptimizer;
+import com.autoheal.util.dom.HtmlOptimizer;
 import com.autoheal.util.LocatorTypeDetector;
+import com.autoheal.util.dom.OptimizedHtmlResult;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.slf4j.Logger;
@@ -684,10 +684,9 @@ public class AutoHealLocator {
             com.microsoft.playwright.Page page, String originalLocator, String description) throws Exception {
 
         logger.debug("Playwright DOM-only strategy: Using only DOM analysis");
-        String html = page.content();
-        html = HtmlOptimizer.optimize(html);
+        OptimizedHtmlResult optimizedHtmlResult = HtmlOptimizer.optimizeWithMetrics(page.content());
         com.autoheal.model.AIAnalysisResult result = aiService.analyzeDOM(
-                html,
+                optimizedHtmlResult.getOptimizedHtml(),
                 description,
                 originalLocator,
                 com.autoheal.model.AutomationFramework.PLAYWRIGHT
