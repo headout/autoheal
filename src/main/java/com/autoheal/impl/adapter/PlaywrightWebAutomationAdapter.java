@@ -5,7 +5,7 @@ import com.autoheal.model.AutomationFramework;
 import com.autoheal.model.ElementContext;
 import com.autoheal.model.ElementFingerprint;
 import com.autoheal.model.Position;
-import com.autoheal.util.HtmlOptimizer;
+import com.autoheal.util.dom.HtmlOptimizer;
 import com.microsoft.playwright.*;
 import com.microsoft.playwright.options.BoundingBox;
 import org.openqa.selenium.By;
@@ -81,7 +81,7 @@ public class PlaywrightWebAutomationAdapter implements WebAutomationAdapter {
     
     @Override
     public CompletableFuture<String> getPageSource() {
-        return CompletableFuture.supplyAsync(() -> HtmlOptimizer.optimize(page.content()));
+        return CompletableFuture.supplyAsync(() -> HtmlOptimizer.optimizeWithMetrics(page.content()).getOptimizedHtml());
     }
     
     

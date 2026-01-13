@@ -193,9 +193,9 @@ public class AIConfig {
         private Duration timeout = Duration.ofSeconds(30);
         private int maxRetries = 3;
         private boolean visualAnalysisEnabled = true;
-        private int maxTokensDOM = 500;
+        private int maxTokensDOM = 700;
         private int maxTokensVisual = 1000;
-        private double temperatureDOM = 0.1;
+        private double temperatureDOM = 0.0;
         private double temperatureVisual = 0.0;
 
         private static String getDefaultApiKey() {
