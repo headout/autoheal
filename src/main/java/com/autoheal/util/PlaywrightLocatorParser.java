@@ -1,6 +1,7 @@
 package com.autoheal.util;
 
 import com.autoheal.model.LocatorFilter;
+import com.autoheal.model.LocatorType;
 import com.autoheal.model.PlaywrightLocator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -271,18 +272,15 @@ public class PlaywrightLocatorParser {
      * Generate a cache key from a locator string and description
      *
      * @param locatorString The locator string
-     * @param description The description
+     * @param description   The description
      * @return Cache key string
      */
     public static String generateCacheKey(String locatorString, String description) {
         PlaywrightLocator.Type type = extractType(locatorString);
-        String descHash = Integer.toHexString(description.hashCode());
-
-        // Use the full locator string to ensure uniqueness
-        // (e.g., getByRole('button', {name: 'A'}) vs getByRole('button', {name: 'B'}) are different)
-        return String.format("playwright:%s:%s:%s",
-                type.name().toLowerCase(),
+        return CacheKeyGenerator.generate(
+                LocatorType.valueOf(String.valueOf(type)),
                 locatorString,
-                descHash);
+                description,
+                null);
     }
 }

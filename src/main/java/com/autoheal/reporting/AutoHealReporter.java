@@ -62,7 +62,7 @@ public class AutoHealReporter {
     }
 
     public AutoHealReporter(ReportingConfig reportingConfig, com.autoheal.config.AIConfig aiConfig) {
-        this.testRunId = reportingConfig.getOutputDirectory() +File.separator+ reportingConfig.getReportNamePrefix();
+        this.testRunId = reportingConfig.getOutputDirectory() + File.separator + reportingConfig.getReportNamePrefix();
         this.startTime = LocalDateTime.now();
         // Read from actual configuration - now supports user-specified models
         this.aiProvider = aiConfig.getProvider().toString();
@@ -169,7 +169,7 @@ public class AutoHealReporter {
      */
     public void generateJSONReport() {
         try {
-            String filename = testRunId + "_AutoHeal_Report.json";
+            String filename = testRunId + File.separator + testRunId + "_AutoHeal_Report.json";
             File file = new File(filename);
 
             ObjectMapper mapper = new ObjectMapper();
@@ -291,7 +291,7 @@ public class AutoHealReporter {
      */
     public void generateTextReport() {
         try {
-            String filename = testRunId + "_AutoHeal_Report.txt";
+            String filename = testRunId + File.separator + testRunId + "_AutoHeal_Report.txt";
             File file = new File(filename);
 
             try (FileWriter writer = new FileWriter(file)) {

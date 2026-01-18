@@ -18,16 +18,12 @@ import com.autoheal.impl.locator.DOMElementLocator;
 import com.autoheal.impl.locator.VisualElementLocator;
 import com.autoheal.metrics.CacheMetrics;
 import com.autoheal.metrics.LocatorMetrics;
-import com.autoheal.model.CachedSelector;
-import com.autoheal.model.ElementContext;
-import com.autoheal.model.LocatorRequest;
-import com.autoheal.model.LocatorResult;
-import com.autoheal.model.LocatorStrategy;
-import com.autoheal.model.LocatorType;
+import com.autoheal.model.*;
 import com.autoheal.monitoring.AutoHealMetrics;
 import com.autoheal.monitoring.HealthStatus;
 import com.autoheal.reporting.AutoHealReporter;
 import com.autoheal.reporting.AutoHealReporter.SelectorStrategy;
+import com.autoheal.util.CacheKeyGenerator;
 import com.autoheal.util.dom.HtmlOptimizer;
 import com.autoheal.util.LocatorTypeDetector;
 import com.autoheal.util.dom.OptimizedHtmlResult;
@@ -1057,7 +1053,12 @@ public class AutoHealLocator {
                             request.getDescription(),
                             request.getContext());
         } else {
-            return request.getOriginalSelector() + "|" + request.getDescription();
+            String descHash = Integer.toHexString(request.getDescription().hashCode());
+            return CacheKeyGenerator.generate(
+                    request.getLocatorType(),
+                    request.getOriginalSelector(),
+                    request.getDescription(),
+                    descHash);
         }
     }
 
