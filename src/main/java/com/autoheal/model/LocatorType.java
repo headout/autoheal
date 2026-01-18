@@ -1,49 +1,35 @@
 package com.autoheal.model;
 
 /**
- * Enum representing different locator strategies supported by AutoHeal
+ * Enum representing all locator strategies supported by AutoHeal
+ * (Selenium + Playwright)
  */
 public enum LocatorType {
 
-    /**
-     * CSS Selector strategy (e.g., "#id", ".class", "input[name='username']")
-     */
+    /* =======================
+     * Selenium-style locators
+     * ======================= */
+
     CSS_SELECTOR("CSS Selector"),
-
-    /**
-     * XPath strategy (e.g., "//input[@name='username']", "//*[@id='login']")
-     */
     XPATH("XPath"),
-
-    /**
-     * ID attribute strategy (e.g., "username", "login-button")
-     */
     ID("ID"),
-
-    /**
-     * Name attribute strategy (e.g., "username", "password")
-     */
     NAME("Name"),
-
-    /**
-     * Class name strategy (e.g., "btn-primary", "form-control")
-     */
     CLASS_NAME("Class Name"),
-
-    /**
-     * Tag name strategy (e.g., "input", "button", "div")
-     */
     TAG_NAME("Tag Name"),
-
-    /**
-     * Link text strategy for anchor tags (exact match)
-     */
     LINK_TEXT("Link Text"),
+    PARTIAL_LINK_TEXT("Partial Link Text"),
 
-    /**
-     * Partial link text strategy for anchor tags (partial match)
-     */
-    PARTIAL_LINK_TEXT("Partial Link Text");
+    /* =======================
+     * Playwright-style locators
+     * ======================= */
+
+    GET_BY_ROLE("Get By Role"),
+    GET_BY_LABEL("Get By Label"),
+    GET_BY_PLACEHOLDER("Get By Placeholder"),
+    GET_BY_TEXT("Get By Text"),
+    GET_BY_ALT_TEXT("Get By Alt Text"),
+    GET_BY_TITLE("Get By Title"),
+    GET_BY_TEST_ID("Get By Test ID");
 
     private final String displayName;
 
@@ -51,8 +37,18 @@ public enum LocatorType {
         this.displayName = displayName;
     }
 
+    /**
+     * Human-readable name (for logs, UI, reports)
+     */
     public String getDisplayName() {
         return displayName;
+    }
+
+    /**
+     * Reporting-friendly name (snake_case)
+     */
+    public String getReportName() {
+        return name().toLowerCase();
     }
 
     @Override

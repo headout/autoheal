@@ -4,6 +4,8 @@ import com.autoheal.config.AIConfig;
 import com.autoheal.config.ResilienceConfig;
 import com.autoheal.core.AIService;
 import com.autoheal.exception.CircuitBreakerOpenException;
+import com.autoheal.impl.ai.prompt.PromptBundle;
+import com.autoheal.impl.ai.prompt.PromptRegistry;
 import com.autoheal.metrics.AIServiceMetrics;
 import com.autoheal.model.AIAnalysisResult;
 import com.autoheal.model.AIProvider;
@@ -71,7 +73,7 @@ public class ResilientAIService implements AIService {
 
     @Override
     public CompletableFuture<AIAnalysisResult> analyzeDOM(String html, String description, String previousSelector,
-                                                           com.autoheal.model.AutomationFramework framework) {
+                                                          com.autoheal.model.AutomationFramework framework) {
         if (!circuitBreaker.canExecute()) {
             metrics.recordCircuitBreakerOpen();
             return CompletableFuture.failedFuture(
@@ -82,13 +84,25 @@ public class ResilientAIService implements AIService {
         return CompletableFuture.supplyAsync(() -> {
             long startTime = System.currentTimeMillis();
             try {
+                String prompt = "";
                 // Build prompt based on framework
-                String prompt = framework == com.autoheal.model.AutomationFramework.PLAYWRIGHT
-                        ? buildPlaywrightDOMAnalysisPrompt(html, description, previousSelector)
-                        : buildDOMAnalysisPrompt(html, description, previousSelector);
+
+                PromptBundle getPrompt = PromptRegistry.getInstance()
+                        .getPrompt(framework.toString().toLowerCase(), "dom");
+
+                if (getPrompt != null) {
+                    prompt = getPrompt.user(description, previousSelector, html);
+                } else {
+                    prompt = framework == com.autoheal.model.AutomationFramework.PLAYWRIGHT
+                            ? buildPlaywrightDOMAnalysisPrompt(html, description, previousSelector)
+                            : buildDOMAnalysisPrompt(html, description, previousSelector);
+                }
+
+
+// Send prompt.system() + prompt.user() to OpenAI / Gemini / Azure
+
 
                 AIAnalysisResult result = callAIWithRetry(prompt, framework);
-
                 circuitBreaker.recordSuccess();
                 metrics.recordRequest(true, System.currentTimeMillis() - startTime);
                 costMetrics.recordDomRequest(); // Track DOM cost
@@ -116,11 +130,11 @@ public class ResilientAIService implements AIService {
         // Smart capability check: Does the configured AI provider support visual analysis?
         if (!config.getProvider().supportsVisualAnalysis()) {
             String message = String.format(
-                "Visual analysis is not supported by the configured AI provider: %s. " +
-                "Supported providers for visual analysis: %s. " +
-                "Consider switching to OpenAI or enabling DOM-only analysis.",
-                config.getProvider(),
-                com.autoheal.model.AIProvider.getVisualAnalysisCapableProviders()
+                    "Visual analysis is not supported by the configured AI provider: %s. " +
+                            "Supported providers for visual analysis: %s. " +
+                            "Consider switching to OpenAI or enabling DOM-only analysis.",
+                    config.getProvider(),
+                    com.autoheal.model.AIProvider.getVisualAnalysisCapableProviders()
             );
             logger.warn(message);
             return CompletableFuture.failedFuture(
@@ -228,146 +242,144 @@ public class ResilientAIService implements AIService {
 
     private String buildDOMAnalysisPrompt(String html, String description, String previousSelector) {
         return String.format("""
-        You are a STRICT Selenium DOM locator-healing agent.
-        
-        TASK:
-        Find the most stable and CORRECT locator for: "%s"
-
-        BROKEN LOCATOR:
-        "%s"
-        
-        HTML (AUTHORITATIVE SOURCE — DO NOT GUESS STRUCTURE):
-        %s
-
-        LOCATOR PRIORITY (HIGHEST → LOWEST):
-        1. xpath() - targeting unique attributes: [id, data-qa-marker, data-testid, name, aria-*]
-           Example: //*[@data-qa-marker='login-button'] or //*[@name='user_email']
-        2. ID selector - targeting the raw ID attribute
-           Example: #submit-id-01
-        3. Data Attributes - data-qa-marker, data-testid, data-test, data-automation
-           Example: [data-testid='save-btn']
-        4. Label-based logic - XPath targeting input via associated label or aria-label
-           Example: //label[contains(text(),'User')]/following::input[1]
-        5. Placeholder-based logic - XPath targeting the placeholder attribute
-           Example: //input[@placeholder='Search...']
-        6. Exact Text match - XPath using exact visible text only
-           Example: //button[text()='Confirm']
-        7. CSS selector - Generic classes or hierarchy (LAST RESORT ONLY)
-
-        STRICT RULES:
-        - If a higher priority locator (e.g., XPath with ID) exists, you MUST use it.
-        - Every locator MUST be unique and return exactly one element.
-        - For text-based matching (Priority 6), do not use `contains()`. Use exact match `text()='value'`.
-        - Do not use index-based XPaths (e.g., //div[3]) unless no other attributes exist.
-        - Respond ONLY with valid JSON.
-        
-         CRITICAL DOM RULES:
-        - DO NOT assume parent-child relationships.
-        - DO NOT combine attributes or text from different elements unless the DOM relationship is explicitly present.
-        - DO NOT use brittle indices (e.g., //div[5]) unless absolutely necessary.
-        - If relationship is NOT provable, use a GENERIC XPath.
-        - NEVER produce an XPath that spans across unrelated components.
-        
-        XPATH CONSTRUCTION RULES:
-        - Prefer single-node XPath whenever possible.
-        - Use following-sibling:: or ancestor:: ONLY when DOM proves the relationship.
-        - Generic XPath is ALWAYS better than an incorrect specific XPath.
-        
-        VALID EXAMPLES:
-        - Correct generic XPath:
-          //a[normalize-space(text())='Italiano']
-        
-        - Correct sibling XPath (ONLY if DOM shows adjacency):
-          //*[@data-qa-marker='language-selector']/following-sibling::a[text()='Italiano']
-        
-        INVALID EXAMPLES (DO NOT DO THIS):
-        - //*[@data-qa-marker='language-selector']//a[text()='Italiano']  (unless DOM proves nesting)
-        
-        OUTPUT:
-        Respond ONLY with valid JSON
-        {
-          "locatorType": "xpath|id|data-attribute|label|placeholder|text|css|NO_MATCH",
-          "locator": "the-locator-string",
-          "confidence": 0.0-1.0,
-          "reasoning": "Brief explanation identifying why this priority was chosen",
-          "alternatives": [
-            { "type": "id", "value": "#new-id" },
-            { "type": "xpath", "value": "//*[@name='submit']" }
-          ]
-        }
-
-        CONFIDENCE SCALE:
-        - 0.95+ : Unique ID or Priority 1 XPath found.
-        - 0.80 - 0.94 : Match found using Priorities 3, 4, or 5.
-        - <0.80 : Priority 6 or 7.
-
-        If the element cannot be found in the HTML, return "NO_MATCH" for locator and 0.0 for confidence.
-        """, description, previousSelector, html);
+                You are a STRICT Selenium DOM locator-healing agent.
+                
+                TASK:
+                Find the most stable and CORRECT locator for: "%s"
+                
+                BROKEN LOCATOR:
+                "%s"
+                
+                HTML (AUTHORITATIVE SOURCE — DO NOT GUESS STRUCTURE):
+                %s
+                
+                LOCATOR PRIORITY (HIGHEST → LOWEST):
+                1. xpath() - targeting unique attributes: [id, data-qa-marker, data-testid, name, aria-*]
+                   Example: //*[@data-qa-marker='login-button'] or //*[@name='user_email']
+                2. ID selector - targeting the raw ID attribute
+                   Example: #submit-id-01
+                3. Data Attributes - data-qa-marker, data-testid, data-test, data-automation
+                   Example: [data-testid='save-btn']
+                4. Label-based logic - XPath targeting input via associated label or aria-label
+                   Example: //label[contains(text(),'User')]/following::input[1]
+                5. Placeholder-based logic - XPath targeting the placeholder attribute
+                   Example: //input[@placeholder='Search...']
+                6. Exact Text match - XPath using exact visible text only
+                   Example: //button[text()='Confirm']
+                7. CSS selector - Generic classes or hierarchy (LAST RESORT ONLY)
+                
+                STRICT RULES:
+                - If a higher priority locator (e.g., XPath with ID) exists, you MUST use it.
+                - Every locator MUST be unique and return exactly one element.
+                - For text-based matching (Priority 6), do not use `contains()`. Use exact match `text()='value'`.
+                - Do not use index-based XPaths (e.g., //div[3]) unless no other attributes exist.
+                - Respond ONLY with valid JSON.
+                
+                 CRITICAL DOM RULES:
+                - DO NOT assume parent-child relationships.
+                - DO NOT combine attributes or text from different elements unless the DOM relationship is explicitly present.
+                - DO NOT use brittle indices (e.g., //div[5]) unless absolutely necessary.
+                - If relationship is NOT provable, use a GENERIC XPath.
+                - NEVER produce an XPath that spans across unrelated components.
+                
+                XPATH CONSTRUCTION RULES:
+                - Prefer single-node XPath whenever possible.
+                - Use following-sibling:: or ancestor:: ONLY when DOM proves the relationship.
+                - Generic XPath is ALWAYS better than an incorrect specific XPath.
+                
+                VALID EXAMPLES:
+                - Correct generic XPath:
+                  //a[normalize-space(text())='Italiano']
+                
+                - Correct sibling XPath (ONLY if DOM shows adjacency):
+                  //*[@data-qa-marker='language-selector']/following-sibling::a[text()='Italiano']
+                
+                INVALID EXAMPLES (DO NOT DO THIS):
+                - //*[@data-qa-marker='language-selector']//a[text()='Italiano']  (unless DOM proves nesting)
+                
+                OUTPUT:
+                Respond ONLY with valid JSON
+                {
+                  "locatorType": "xpath|id|data-attribute|label|placeholder|text|css|NO_MATCH",
+                  "locator": "the-locator-string",
+                  "confidence": 0.0-1.0,
+                  "reasoning": "Brief explanation identifying why this priority was chosen",
+                  "alternatives": [
+                    { "type": "id", "value": "#new-id" },
+                    { "type": "xpath", "value": "//*[@name='submit']" }
+                  ]
+                }
+                
+                CONFIDENCE SCALE:
+                - 0.95+ : Unique ID or Priority 1 XPath found.
+                - 0.80 - 0.94 : Match found using Priorities 3, 4, or 5.
+                - <0.80 : Priority 6 or 7.
+                
+                If the element cannot be found in the HTML, return "NO_MATCH" for locator and 0.0 for confidence.
+                """, description, previousSelector, html);
     }
-
-
 
 
     private String buildPlaywrightDOMAnalysisPrompt(String html, String description, String previousLocator) {
         return String.format("""
-        You are a STRICT Playwright automation expert.
-        
-        TASK:
-        Find the most stable and CORRECT locator for: "%s"
-        
-        BROKEN LOCATOR:
-        "%s"
-        
-        HTML (AUTHORITATIVE SOURCE — DO NOT GUESS STRUCTURE):
-        %s
-             
-       LOCATOR PRIORITY (HIGHEST → LOWEST):
-        1. XPath using attributes on the SAME element (id, data-qa-marker, data-testid, name, aria-*)
-        2. XPath using EXPLICIT DOM relationships (ancestor / descendant / following-sibling / preceding-sibling)
-        3. ID selector (#id)
-        4. getByTestId() / data-qa-marker
-        5. getByLabel() (ONLY if label or aria-label exists)
-        6. getByPlaceholder() (ONLY if placeholder exists)
-        7. getByText() (EXACT visible text only)
-        8. CSS selector (LAST RESORT)
-        
-        CRITICAL DOM RULES:
-        - DO NOT assume parent-child relationships.
-        - DO NOT combine attributes or text from different elements unless the DOM relationship is explicitly present.
-        - DO NOT use brittle indices (e.g., //div[5]) unless absolutely necessary.
-        - If relationship is NOT provable, use a GENERIC XPath.
-        - NEVER produce an XPath that spans across unrelated components.
-        
-        XPATH CONSTRUCTION RULES:
-        - Prefer single-node XPath whenever possible.
-        - Use following-sibling:: or ancestor:: ONLY when DOM proves the relationship.
-        - Generic XPath is ALWAYS better than an incorrect specific XPath.
-        
-        VALID EXAMPLES:
-        - Correct generic XPath:
-          //a[normalize-space(text())='Italiano']
-        
-        - Correct sibling XPath (ONLY if DOM shows adjacency):
-          //*[@data-qa-marker='language-selector']/following-sibling::a[text()='Italiano']
-        
-        INVALID EXAMPLES (DO NOT DO THIS):
-        - //*[@data-qa-marker='language-selector']//a[text()='Italiano']  (unless DOM proves nesting)
-        
-        OUTPUT:
-        Respond ONLY with valid JSON.
-        
-        {
-          "locatorType": "xpath|id|getByTestId|getByLabel|getByPlaceholder|getByText|css",
-          "value": "locator",
-          "options": { "exact": true },
-          "confidence": 0.0-1.0,
-          "reasoning": "Explain which DOM relationship was validated",
-           "alternatives": [
-                {"type": "css", "value": ".submit-btn"},
-                {"type": "getByText", "value": "Login"}
-            ]
-        }
-""", description, previousLocator, html);
+                        You are a STRICT Playwright automation expert.
+                
+                        TASK:
+                        Find the most stable and CORRECT locator for: "%s"
+                
+                        BROKEN LOCATOR:
+                        "%s"
+                
+                        HTML (AUTHORITATIVE SOURCE — DO NOT GUESS STRUCTURE):
+                        %s
+                
+                       LOCATOR PRIORITY (HIGHEST → LOWEST):
+                        1. XPath using attributes on the SAME element (id, data-qa-marker, data-testid, name, aria-*)
+                        2. XPath using EXPLICIT DOM relationships (ancestor / descendant / following-sibling / preceding-sibling)
+                        3. ID selector (#id)
+                        4. getByTestId() / data-qa-marker
+                        5. getByLabel() (ONLY if label or aria-label exists)
+                        6. getByPlaceholder() (ONLY if placeholder exists)
+                        7. getByText() (EXACT visible text only)
+                        8. CSS selector (LAST RESORT)
+                
+                        CRITICAL DOM RULES:
+                        - DO NOT assume parent-child relationships.
+                        - DO NOT combine attributes or text from different elements unless the DOM relationship is explicitly present.
+                        - DO NOT use brittle indices (e.g., //div[5]) unless absolutely necessary.
+                        - If relationship is NOT provable, use a GENERIC XPath.
+                        - NEVER produce an XPath that spans across unrelated components.
+                
+                        XPATH CONSTRUCTION RULES:
+                        - Prefer single-node XPath whenever possible.
+                        - Use following-sibling:: or ancestor:: ONLY when DOM proves the relationship.
+                        - Generic XPath is ALWAYS better than an incorrect specific XPath.
+                
+                        VALID EXAMPLES:
+                        - Correct generic XPath:
+                          //a[normalize-space(text())='Italiano']
+                
+                        - Correct sibling XPath (ONLY if DOM shows adjacency):
+                          //*[@data-qa-marker='language-selector']/following-sibling::a[text()='Italiano']
+                
+                        INVALID EXAMPLES (DO NOT DO THIS):
+                        - //*[@data-qa-marker='language-selector']//a[text()='Italiano']  (unless DOM proves nesting)
+                
+                        OUTPUT:
+                        Respond ONLY with valid JSON.
+                
+                        {
+                          "locatorType": "xpath|id|getByTestId|getByLabel|getByPlaceholder|getByText|css",
+                          "value": "locator",
+                          "options": { "exact": true },
+                          "confidence": 0.0-1.0,
+                          "reasoning": "Explain which DOM relationship was validated",
+                           "alternatives": [
+                                {"type": "css", "value": ".submit-btn"},
+                                {"type": "getByText", "value": "Login"}
+                            ]
+                        }
+                """, description, previousLocator, html);
     }
 
     private AIAnalysisResult callAIWithRetry(String prompt, com.autoheal.model.AutomationFramework framework) {
@@ -432,7 +444,7 @@ public class ResilientAIService implements AIService {
                 return performMockDOMAnalysis(prompt, framework);
             default:
                 throw new UnsupportedOperationException(
-                    String.format("DOM analysis not implemented for provider: %s", config.getProvider())
+                        String.format("DOM analysis not implemented for provider: %s", config.getProvider())
                 );
         }
     }
@@ -749,8 +761,8 @@ public class ResilientAIService implements AIService {
                     .confidence(0.9)
                     .reasoning("Mock Playwright analysis: Generated getByTestId locator for testing")
                     .alternatives(Arrays.asList(
-                        new ElementCandidate("getByLabel('Password')", 0.8, "Mock label alternative", null, new HashMap<>()),
-                        new ElementCandidate("getByPlaceholder('Enter password')", 0.7, "Mock placeholder", null, new HashMap<>())
+                            new ElementCandidate("getByLabel('Password')", 0.8, "Mock label alternative", null, new HashMap<>()),
+                            new ElementCandidate("getByPlaceholder('Enter password')", 0.7, "Mock placeholder", null, new HashMap<>())
                     ))
                     .build();
         } else {
@@ -761,8 +773,8 @@ public class ResilientAIService implements AIService {
                     .confidence(0.9)
                     .reasoning("Mock Selenium analysis: Generated CSS selector for testing")
                     .alternatives(Arrays.asList(
-                        new ElementCandidate("#password", 0.8, "Mock alternative", null, new HashMap<>()),
-                        new ElementCandidate("input[name='password']", 0.7, "Mock name-based", null, new HashMap<>())
+                            new ElementCandidate("#password", 0.8, "Mock alternative", null, new HashMap<>()),
+                            new ElementCandidate("input[name='password']", 0.7, "Mock name-based", null, new HashMap<>())
                     ))
                     .build();
         }
@@ -774,8 +786,8 @@ public class ResilientAIService implements AIService {
 
         request.put("model", config.getModel());
         request.put("max_completion_tokens", config.getMaxTokensDOM()); // ✅ correct
-       // request.put("max_tokens", config.getMaxTokensDOM()); // ✅ FIXED
-      //  request.put("temperature", 0); // recommend 0 for deterministic JSON
+        // request.put("max_tokens", config.getMaxTokensDOM()); // ✅ FIXED
+        //  request.put("temperature", 0); // recommend 0 for deterministic JSON
 
         ArrayNode messages = mapper.createArrayNode();
 
@@ -814,7 +826,7 @@ public class ResilientAIService implements AIService {
         ObjectNode part = mapper.createObjectNode();
 
         String systemPrompt = "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
-            "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.\n\n";
+                "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.\n\n";
 
         part.put("text", systemPrompt + prompt);
         parts.add(part);
@@ -950,7 +962,7 @@ public class ResilientAIService implements AIService {
             String reasoning = aiResponse.path("reasoning").asText("AI-generated Playwright locator");
 
             logger.debug("Parsed Playwright locator: type='{}', value='{}', confidence={}",
-                        locatorType, value, confidence);
+                    locatorType, value, confidence);
 
             // Build PlaywrightLocator
             com.autoheal.model.PlaywrightLocator.Builder locatorBuilder = com.autoheal.model.PlaywrightLocator.builder();
@@ -1014,10 +1026,10 @@ public class ResilientAIService implements AIService {
                         String altValue = alt.path("value").asText();
                         String altSelector = altType + "('" + altValue + "')";
                         alternatives.add(new ElementCandidate(altSelector, confidence * 0.8,
-                            "Alternative Playwright locator", null, new HashMap<>()));
+                                "Alternative Playwright locator", null, new HashMap<>()));
                     } else if (alt.isTextual()) {
                         alternatives.add(new ElementCandidate(alt.asText(), confidence * 0.8,
-                            "Alternative selector", null, new HashMap<>()));
+                                "Alternative selector", null, new HashMap<>()));
                     }
                 }
             }
@@ -1053,7 +1065,7 @@ public class ResilientAIService implements AIService {
                 for (JsonNode alt : alternativesNode) {
                     if (alt.isTextual()) {
                         alternatives.add(new ElementCandidate(alt.asText(), confidence * 0.8,
-                            "Alternative selector", null, new HashMap<>()));
+                                "Alternative selector", null, new HashMap<>()));
                     }
                 }
             }
@@ -1085,8 +1097,8 @@ public class ResilientAIService implements AIService {
         ObjectNode systemMessage = mapper.createObjectNode();
         systemMessage.put("role", "system");
         systemMessage.put("content",
-            "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
-            "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.");
+                "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
+                        "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.");
 
         ObjectNode userMessage = mapper.createObjectNode();
         userMessage.put("role", "user");
@@ -1115,7 +1127,7 @@ public class ResilientAIService implements AIService {
         ObjectNode message = mapper.createObjectNode();
         message.put("role", "user");
         message.put("content", "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
-            "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.\n\n" + prompt);
+                "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.\n\n" + prompt);
 
         messages.add(message);
         request.set("messages", messages);
@@ -1140,8 +1152,8 @@ public class ResilientAIService implements AIService {
         ObjectNode systemMessage = mapper.createObjectNode();
         systemMessage.put("role", "system");
         systemMessage.put("content",
-            "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
-            "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.");
+                "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
+                        "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.");
 
         ObjectNode userMessage = mapper.createObjectNode();
         userMessage.put("role", "user");
@@ -1172,8 +1184,8 @@ public class ResilientAIService implements AIService {
         ObjectNode systemMessage = mapper.createObjectNode();
         systemMessage.put("role", "system");
         systemMessage.put("content",
-            "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
-            "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.");
+                "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
+                        "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.");
 
         ObjectNode userMessage = mapper.createObjectNode();
         userMessage.put("role", "user");
@@ -1259,7 +1271,7 @@ public class ResilientAIService implements AIService {
             }
         } catch (Exception e) {
             logger.warn("Error converting AI selector '{}' of type '{}', returning as-is: {}",
-                       selector, selectorType, e.getMessage());
+                    selector, selectorType, e.getMessage());
             return selector;
         }
     }
@@ -1272,49 +1284,49 @@ public class ResilientAIService implements AIService {
 
     private String createEnhancedVisualAnalysisPrompt(String description) {
         return String.format("""
-            You are an expert web automation engineer. Analyze the provided screenshot to locate an element described as: "%s"
-
-            Generate ROBUST selectors that will survive DOM changes by identifying:
-            1. Multiple identification strategies (ID, class, attributes, text content)
-            2. Stable visual landmarks nearby for relative positioning
-            3. Hierarchical relationships with parent containers
-            4. Text-based selectors using visible content
-            5. Semantic attributes like data-testid, aria-label, role
-
-            Respond in JSON format:
-            {
-                "primary_selector": "most reliable CSS selector",
-                "alternative_selectors": ["fallback option 1", "fallback option 2", "fallback option 3"],
-                "visual_landmarks": ["stable nearby elements for context"],
-                "text_based_selector": "selector using visible text if available",
-                "attribute_hints": ["data-testid suggestions", "aria-label suggestions", "role suggestions"],
-                "relative_position": "position relative to stable UI elements",
-                "element_description": "what you see that matches the description",
-                "confidence": 0.85,
-                "stability_reasoning": "why these selectors should survive DOM changes"
-            }
-
-            Focus on creating selectors that are:
-            - Resilient to DOM structure changes
-            - Multiple fallback options available
-            - Based on semantic meaning and accessibility attributes
-            - Contextually aware of surrounding stable elements
-            """, description);
+                You are an expert web automation engineer. Analyze the provided screenshot to locate an element described as: "%s"
+                
+                Generate ROBUST selectors that will survive DOM changes by identifying:
+                1. Multiple identification strategies (ID, class, attributes, text content)
+                2. Stable visual landmarks nearby for relative positioning
+                3. Hierarchical relationships with parent containers
+                4. Text-based selectors using visible content
+                5. Semantic attributes like data-testid, aria-label, role
+                
+                Respond in JSON format:
+                {
+                    "primary_selector": "most reliable CSS selector",
+                    "alternative_selectors": ["fallback option 1", "fallback option 2", "fallback option 3"],
+                    "visual_landmarks": ["stable nearby elements for context"],
+                    "text_based_selector": "selector using visible text if available",
+                    "attribute_hints": ["data-testid suggestions", "aria-label suggestions", "role suggestions"],
+                    "relative_position": "position relative to stable UI elements",
+                    "element_description": "what you see that matches the description",
+                    "confidence": 0.85,
+                    "stability_reasoning": "why these selectors should survive DOM changes"
+                }
+                
+                Focus on creating selectors that are:
+                - Resilient to DOM structure changes
+                - Multiple fallback options available
+                - Based on semantic meaning and accessibility attributes
+                - Contextually aware of surrounding stable elements
+                """, description);
     }
 
     private String createSimpleVisualAnalysisPrompt(String description) {
         return String.format("""
-            Analyze this screenshot to locate an element described as: "%s"
-
-            Find the element and provide a CSS selector for it.
-
-            Respond in JSON format:
-            {
-                "selector": "css-selector-here",
-                "confidence": 0.85,
-                "reasoning": "brief explanation"
-            }
-            """, description);
+                Analyze this screenshot to locate an element described as: "%s"
+                
+                Find the element and provide a CSS selector for it.
+                
+                Respond in JSON format:
+                {
+                    "selector": "css-selector-here",
+                    "confidence": 0.85,
+                    "reasoning": "brief explanation"
+                }
+                """, description);
     }
 
     private String createVisualAnalysisRequestBody(String prompt, String base64Image) {
@@ -1571,7 +1583,7 @@ public class ResilientAIService implements AIService {
         }
 
         logger.debug("Enhanced visual parsing succeeded - Primary: {}, Alternatives: {}",
-                    primarySelector, alternatives.size());
+                primarySelector, alternatives.size());
 
         return AIAnalysisResult.builder()
                 .recommendedSelector(primarySelector)
@@ -1612,7 +1624,7 @@ public class ResilientAIService implements AIService {
         }
 
         logger.debug("Legacy visual parsing succeeded - Primary: {}, Alternatives: {}",
-                    selector, alternatives.size());
+                selector, alternatives.size());
 
         return AIAnalysisResult.builder()
                 .recommendedSelector(selector)
@@ -1633,16 +1645,16 @@ public class ResilientAIService implements AIService {
         // Generate common selector patterns as emergency alternatives
         if (description.toLowerCase().contains("button")) {
             emergencyAlternatives.add(new ElementCandidate(
-                "button", 0.4, description + " (button fallback)", null, new HashMap<>()
+                    "button", 0.4, description + " (button fallback)", null, new HashMap<>()
             ));
             emergencyAlternatives.add(new ElementCandidate(
-                "input[type='submit']", 0.3, description + " (submit fallback)", null, new HashMap<>()
+                    "input[type='submit']", 0.3, description + " (submit fallback)", null, new HashMap<>()
             ));
         }
 
         if (description.toLowerCase().contains("input") || description.toLowerCase().contains("field")) {
             emergencyAlternatives.add(new ElementCandidate(
-                "input", 0.4, description + " (input fallback)", null, new HashMap<>()
+                    "input", 0.4, description + " (input fallback)", null, new HashMap<>()
             ));
         }
 
@@ -1668,7 +1680,7 @@ public class ResilientAIService implements AIService {
                 return performMockVisualAnalysis(description);
             default:
                 throw new UnsupportedOperationException(
-                    String.format("Visual analysis not implemented for provider: %s", config.getProvider())
+                        String.format("Visual analysis not implemented for provider: %s", config.getProvider())
                 );
         }
     }
@@ -1758,8 +1770,8 @@ public class ResilientAIService implements AIService {
                 .confidence(0.9)
                 .reasoning("Mock visual analysis: Generated selector based on description")
                 .alternatives(Arrays.asList(
-                    new ElementCandidate("input[type='text']", 0.8, "Mock alternative", null, new HashMap<>()),
-                    new ElementCandidate("*[contains(@placeholder, 'user')]", 0.7, "Mock XPath alternative", null, new HashMap<>())
+                        new ElementCandidate("input[type='text']", 0.8, "Mock alternative", null, new HashMap<>()),
+                        new ElementCandidate("*[contains(@placeholder, 'user')]", 0.7, "Mock XPath alternative", null, new HashMap<>())
                 ))
                 .build();
     }
@@ -1798,26 +1810,26 @@ public class ResilientAIService implements AIService {
 
     private String buildDisambiguationPrompt(String description, String elementsContext) {
         return String.format("""
-            You are a web automation expert helping to identify the correct element from multiple candidates.
-
-            Target element description: "%s"
-
-            Available elements:
-            %s
-
-            TASK: Select the element that BEST matches the description "%s".
-
-            Consider:
-            1. Text content that matches the description
-            2. Element attributes (id, class, name, aria-label, data-testid)
-            3. Element type and context
-            4. Semantic meaning
-
-            IMPORTANT: Respond with ONLY the element number (1, 2, 3, etc.) that best matches the description.
-            Do not provide any explanation or additional text.
-
-            Element number:
-            """, description, elementsContext, description);
+                You are a web automation expert helping to identify the correct element from multiple candidates.
+                
+                Target element description: "%s"
+                
+                Available elements:
+                %s
+                
+                TASK: Select the element that BEST matches the description "%s".
+                
+                Consider:
+                1. Text content that matches the description
+                2. Element attributes (id, class, name, aria-label, data-testid)
+                3. Element type and context
+                4. Semantic meaning
+                
+                IMPORTANT: Respond with ONLY the element number (1, 2, 3, etc.) that best matches the description.
+                Do not provide any explanation or additional text.
+                
+                Element number:
+                """, description, elementsContext, description);
     }
 
     private int callAIForDisambiguation(String prompt) {
@@ -1913,9 +1925,9 @@ public class ResilientAIService implements AIService {
         ObjectNode systemMessage = mapper.createObjectNode();
         systemMessage.put("role", "system");
         systemMessage.put("content",
-            "You are a web automation expert. When given multiple elements and a description, " +
-            "respond with only the number of the element that best matches the description. " +
-            "Respond with just the number, no other text.");
+                "You are a web automation expert. When given multiple elements and a description, " +
+                        "respond with only the number of the element that best matches the description. " +
+                        "Respond with just the number, no other text.");
 
         ObjectNode userMessage = mapper.createObjectNode();
         userMessage.put("role", "user");
@@ -1943,8 +1955,8 @@ public class ResilientAIService implements AIService {
         ObjectNode part = mapper.createObjectNode();
 
         String systemPrompt = "You are a web automation expert. When given multiple elements and a description, " +
-            "respond with only the number of the element that best matches the description. " +
-            "Respond with just the number, no other text.\n\n";
+                "respond with only the number of the element that best matches the description. " +
+                "Respond with just the number, no other text.\n\n";
 
         part.put("text", systemPrompt + prompt);
         parts.add(part);
@@ -2130,9 +2142,9 @@ public class ResilientAIService implements AIService {
         ObjectNode systemMessage = mapper.createObjectNode();
         systemMessage.put("role", "system");
         systemMessage.put("content",
-            "You are a web automation expert. When given multiple elements and a description, " +
-            "respond with only the number of the element that best matches the description. " +
-            "Respond with just the number, no other text.");
+                "You are a web automation expert. When given multiple elements and a description, " +
+                        "respond with only the number of the element that best matches the description. " +
+                        "Respond with just the number, no other text.");
 
         ObjectNode userMessage = mapper.createObjectNode();
         userMessage.put("role", "user");
@@ -2161,8 +2173,8 @@ public class ResilientAIService implements AIService {
         ObjectNode message = mapper.createObjectNode();
         message.put("role", "user");
         message.put("content", "You are a web automation expert. When given multiple elements and a description, " +
-            "respond with only the number of the element that best matches the description. " +
-            "Respond with just the number, no other text.\n\n" + prompt);
+                "respond with only the number of the element that best matches the description. " +
+                "Respond with just the number, no other text.\n\n" + prompt);
 
         messages.add(message);
         request.set("messages", messages);
@@ -2187,9 +2199,9 @@ public class ResilientAIService implements AIService {
         ObjectNode systemMessage = mapper.createObjectNode();
         systemMessage.put("role", "system");
         systemMessage.put("content",
-            "You are a web automation expert. When given multiple elements and a description, " +
-            "respond with only the number of the element that best matches the description. " +
-            "Respond with just the number, no other text.");
+                "You are a web automation expert. When given multiple elements and a description, " +
+                        "respond with only the number of the element that best matches the description. " +
+                        "Respond with just the number, no other text.");
 
         ObjectNode userMessage = mapper.createObjectNode();
         userMessage.put("role", "user");
@@ -2220,9 +2232,9 @@ public class ResilientAIService implements AIService {
         ObjectNode systemMessage = mapper.createObjectNode();
         systemMessage.put("role", "system");
         systemMessage.put("content",
-            "You are a web automation expert. When given multiple elements and a description, " +
-            "respond with only the number of the element that best matches the description. " +
-            "Respond with just the number, no other text.");
+                "You are a web automation expert. When given multiple elements and a description, " +
+                        "respond with only the number of the element that best matches the description. " +
+                        "Respond with just the number, no other text.");
 
         ObjectNode userMessage = mapper.createObjectNode();
         userMessage.put("role", "user");
@@ -2281,8 +2293,8 @@ public class ResilientAIService implements AIService {
         ObjectNode systemMessage = mapper.createObjectNode();
         systemMessage.put("role", "system");
         systemMessage.put("content",
-            "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
-            "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.");
+                "You are an expert web automation engineer. Analyze HTML DOM to find the correct CSS selector for elements. " +
+                        "Always respond with valid JSON containing: selector, confidence (0.0-1.0), reasoning, and alternatives array.");
 
         ObjectNode userMessage = mapper.createObjectNode();
         userMessage.put("role", "user");
@@ -2373,7 +2385,7 @@ public class ResilientAIService implements AIService {
                 for (JsonNode alt : alternativesNode) {
                     if (alt.isTextual()) {
                         alternatives.add(new ElementCandidate(alt.asText(), confidence * 0.8,
-                            "Ollama alternative selector", null, new HashMap<>()));
+                                "Ollama alternative selector", null, new HashMap<>()));
                     }
                 }
             }

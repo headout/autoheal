@@ -105,29 +105,75 @@ public class LocatorTypeDetector {
         String trimmedLocator = locator.trim();
         logger.debug("Creating By object for '{}' as {}", trimmedLocator, type);
 
-        switch (type) {
-            case CSS_SELECTOR:
-                return By.cssSelector(trimmedLocator);
-            case XPATH:
-                return By.xpath(trimmedLocator);
-            case ID:
-                return By.id(trimmedLocator);
-            case NAME:
-                return By.name(trimmedLocator);
-            case CLASS_NAME:
-                return By.className(trimmedLocator);
-            case TAG_NAME:
-                return By.tagName(trimmedLocator);
-            case LINK_TEXT:
-                return By.linkText(trimmedLocator);
-            case PARTIAL_LINK_TEXT:
-                return By.partialLinkText(trimmedLocator);
-            default:
-                logger.warn("Unknown locator type {}, defaulting to CSS selector", type);
-                return By.cssSelector(trimmedLocator);
-        }
+        return switch (type) {
+            case CSS_SELECTOR -> By.cssSelector(trimmedLocator);
+            case XPATH -> By.xpath(trimmedLocator);
+            case ID -> By.id(trimmedLocator);
+            case NAME -> By.name(trimmedLocator);
+            case CLASS_NAME -> By.className(trimmedLocator);
+            case TAG_NAME -> By.tagName(trimmedLocator);
+            case LINK_TEXT -> By.linkText(trimmedLocator);
+            case PARTIAL_LINK_TEXT -> By.partialLinkText(trimmedLocator);
+            case GET_BY_ROLE, GET_BY_LABEL, GET_BY_ALT_TEXT, GET_BY_PLACEHOLDER, GET_BY_TEXT, GET_BY_TEST_ID,
+                 GET_BY_TITLE -> createByGet(locator, type);
+        };
     }
 
+    public static By createByGet(String value, LocatorType type) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException("Locator cannot be null or empty");
+        }
+
+        String escaped = escapeXPathText(value.trim());
+
+        return switch (type) {
+
+            case GET_BY_TEXT -> By.xpath("//*[normalize-space(.)=" + escaped + "]");
+
+            case GET_BY_LABEL -> By.xpath("//label[normalize-space(.)=" + escaped +
+                    "]/following::*[self::input or self::textarea or self::select][1]");
+
+            case GET_BY_PLACEHOLDER -> By.xpath("//*[@placeholder=" + escaped + "]");
+
+            case GET_BY_ALT_TEXT -> By.xpath("//*[@alt=" + escaped + "]");
+
+            case GET_BY_TITLE -> By.xpath("//*[@title=" + escaped + "]");
+
+            case GET_BY_TEST_ID -> By.xpath("//*[@data-testid=" + escaped + "]");
+
+            case GET_BY_ROLE ->
+                    By.xpath("//*[(self::button or @role='button') and normalize-space(.)=" + escaped + "]");
+
+            default -> {
+                logger.warn("Unsupported GET_BY locator type: {}", type);
+                throw new UnsupportedOperationException(
+                        "Cannot convert locator type to XPath: " + type
+                );
+            }
+        };
+    }
+
+    private static String escapeXPathText(String text) {
+        if (!text.contains("'")) {
+            return "'" + text + "'";
+        }
+        if (!text.contains("\"")) {
+            return "\"" + text + "\"";
+        }
+
+        StringBuilder sb = new StringBuilder("concat(");
+        char[] chars = text.toCharArray();
+        for (int i = 0; i < chars.length; i++) {
+            if (i > 0) sb.append(",");
+            if (chars[i] == '\'') {
+                sb.append("\"'\"");
+            } else {
+                sb.append("'").append(chars[i]).append("'");
+            }
+        }
+        sb.append(")");
+        return sb.toString();
+    }
     /**
      * Auto-detect and create Selenium By object
      *
