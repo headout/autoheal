@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>com.headout</groupId>
-  <artifactId>autoheal</artifactId>
+  <artifactId>autoheal-locator</artifactId>
   <version>1.0.2</version>
   <packaging>jar</packaging>
 
@@ -355,7 +355,7 @@
     <repository>
       <id>github</id>
       <name>GitHub OWNER Apache Maven Packages</name>
-      <url>https://maven.pkg.github.com/headout/autoheal-locator</url>
+      <url>https://maven.pkg.github.com/headout/autoheal</url>
     </repository>
 
   </distributionManagement>
